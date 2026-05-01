@@ -17,6 +17,7 @@ define('CSMCR_JOBS_OPT', 'csmcr_jobs');
 define('CSMCR_NS', 'cloud-site-mover/v1');
 define('CSMCR_CRON_HOOK', 'csmcr_background_step');
 define('CSMCR_BG_LOCK', 'csmcr_background_lock');
+define('CSMCR_JOB_STEP_LOCK', 'csmcr_job_step_lock');
 define('CSMCR_MAIN_FILE', __FILE__);
 
 require_once __DIR__ . '/includes/Core/Loader.php';
@@ -102,6 +103,7 @@ final class CSMCR_Plugin {
         if (!current_user_can('manage_options')) { return; }
         $o = self::opts();
         $profiles = self::profiles();
+        $allowlist_entries = self::ip_allowlist_values((string)($o['ip_allowlist'] ?? ''));
         $url = admin_url('tools.php?page=cloud-site-mover');
         ?>
         <div class="wrap">
@@ -114,7 +116,8 @@ final class CSMCR_Plugin {
                 <table class="form-table" role="presentation">
                     <tr><th>Your shared secret</th><td>
                         <code><?php echo esc_html(CSMCR_Settings::mask_secret($o['secret'])); ?></code>
-                        <details style="margin-top:6px"><summary>Reveal full secret</summary><code style="user-select:all"><?php echo esc_html($o['secret']); ?></code></details>
+                        <details style="margin-top:6px"><summary><?php esc_html_e('Reveal full secret', 'cloud-site-mover-clean-room'); ?></summary><code style="user-select:all"><?php echo esc_html($o['secret']); ?></code></details>
+                        <div style="margin-top:6px"><?php self::button('rotate_secret', __('Rotate shared secret', 'cloud-site-mover-clean-room')); ?></div>
                     </td></tr>
                     <tr><th>Remote/source URL</th><td><input class="regular-text" name="remote_url" value="<?php echo esc_attr($o['remote_url']); ?>" placeholder="https://old-site.com" /></td></tr>
                     <tr><th>Remote/source secret</th><td><input class="regular-text" name="remote_secret" value="<?php echo esc_attr($o['remote_secret']); ?>" /></td></tr>
@@ -130,7 +133,9 @@ final class CSMCR_Plugin {
                         <label><input type="checkbox" name="allow_file_write" value="1" <?php checked($o['allow_file_write']); ?> /> Upload/media writes</label><br>
                         <label><input type="checkbox" name="allow_theme_plugin_write" value="1" <?php checked($o['allow_theme_plugin_write']); ?> /> Theme/plugin folder writes</label><br>
                         <label><input type="checkbox" name="allow_multisite_beta" value="1" <?php checked($o['allow_multisite_beta']); ?> /> Guarded multisite planning endpoints</label><br>
-                        <label><input type="checkbox" name="allow_legacy_auth" value="1" <?php checked($o['allow_legacy_auth']); ?> /> Allow legacy secret-only remote auth (compat mode)</label><br>
+                        <label><input type="checkbox" name="allow_legacy_auth" value="1" <?php checked($o['allow_legacy_auth']); ?> /> <?php esc_html_e('Allow legacy secret-only remote auth (compat mode)', 'cloud-site-mover-clean-room'); ?></label><br>
+                        <label><input type="checkbox" name="enforce_https" value="1" <?php checked($o['enforce_https']); ?> /> <?php esc_html_e('Require HTTPS for remote URL', 'cloud-site-mover-clean-room'); ?></label><br>
+                        <label><?php esc_html_e('Remote IP/CIDR allowlist (one entry per line)', 'cloud-site-mover-clean-room'); ?><br><textarea name="ip_allowlist" rows="3" class="regular-text" placeholder="203.0.113.10\n198.51.100.22\n10.0.0.0/24"><?php echo esc_textarea($o['ip_allowlist']); ?></textarea></label><br>
                         <label><input type="checkbox" name="auto_backup_db" value="1" <?php checked($o['auto_backup_db']); ?> /> Auto-create DB backup before pull/push overwrite</label><br>
                         <label><input type="checkbox" name="skip_same_files" value="1" <?php checked($o['skip_same_files']); ?> /> Skip files with same size and modified time</label><br>
                         <label><input type="checkbox" name="use_file_hash" value="1" <?php checked($o['use_file_hash']); ?> /> Add SHA1 hashes to file manifests when comparing files</label><br>
@@ -139,6 +144,10 @@ final class CSMCR_Plugin {
                         <label><input type="checkbox" name="background_enabled" value="1" <?php checked($o['background_enabled']); ?> /> Enable WP-Cron background runner</label><br>
                         <label>Background delay <input type="number" min="15" max="3600" name="background_delay_seconds" value="<?php echo esc_attr($o['background_delay_seconds']); ?>" /> seconds</label><br>
                         <label>Background max steps per run <input type="number" min="1" max="10" name="background_max_steps" value="<?php echo esc_attr($o['background_max_steps']); ?>" /></label><br>
+                        <label><?php esc_html_e('Max retries per failed step', 'cloud-site-mover-clean-room'); ?> <input type="number" min="0" max="10" name="max_step_retries" value="<?php echo esc_attr($o['max_step_retries']); ?>" /></label><br>
+                        <label><?php esc_html_e('Auth timestamp skew window', 'cloud-site-mover-clean-room'); ?> <input type="number" min="30" max="3600" name="auth_max_skew_seconds" value="<?php echo esc_attr($o['auth_max_skew_seconds']); ?>" /> <?php esc_html_e('seconds', 'cloud-site-mover-clean-room'); ?></label><br>
+                        <label><?php esc_html_e('Auth rate limit per minute', 'cloud-site-mover-clean-room'); ?> <input type="number" min="10" max="5000" name="auth_rate_limit_per_minute" value="<?php echo esc_attr($o['auth_rate_limit_per_minute']); ?>" /></label><br>
+                        <label><?php esc_html_e('Job step lock timeout', 'cloud-site-mover-clean-room'); ?> <input type="number" min="15" max="1800" name="job_step_lock_timeout_seconds" value="<?php echo esc_attr($o['job_step_lock_timeout_seconds']); ?>" /> <?php esc_html_e('seconds', 'cloud-site-mover-clean-room'); ?></label><br>
                         <label>Keep latest reports <input type="number" min="1" max="100" name="max_reports" value="<?php echo esc_attr($o['max_reports']); ?>" /></label><br>
                         <label>Keep latest DB backups <input type="number" min="1" max="100" name="max_backups" value="<?php echo esc_attr($o['max_backups']); ?>" /></label><br>
                         <label>Multisite source blog ID <input type="number" min="1" max="999999" name="multisite_source_blog_id" value="<?php echo esc_attr($o['multisite_source_blog_id']); ?>" /></label><br>
@@ -148,6 +157,18 @@ final class CSMCR_Plugin {
                 </table>
                 <?php submit_button('Save settings'); ?>
             </form>
+
+            <h2><?php esc_html_e('Security Summary', 'cloud-site-mover-clean-room'); ?></h2>
+            <table class="widefat" style="max-width:760px;margin-bottom:12px">
+                <tbody>
+                    <tr><td><strong><?php esc_html_e('Legacy auth', 'cloud-site-mover-clean-room'); ?></strong></td><td><?php echo !empty($o['allow_legacy_auth']) ? esc_html__('Enabled', 'cloud-site-mover-clean-room') : esc_html__('Disabled', 'cloud-site-mover-clean-room'); ?></td></tr>
+                    <tr><td><strong><?php esc_html_e('HTTPS enforcement', 'cloud-site-mover-clean-room'); ?></strong></td><td><?php echo !empty($o['enforce_https']) ? esc_html__('Enabled', 'cloud-site-mover-clean-room') : esc_html__('Disabled', 'cloud-site-mover-clean-room'); ?></td></tr>
+                    <tr><td><strong><?php esc_html_e('Auth skew window', 'cloud-site-mover-clean-room'); ?></strong></td><td><?php echo esc_html((string)($o['auth_max_skew_seconds'] ?? 300)); ?>s</td></tr>
+                    <tr><td><strong><?php esc_html_e('Auth rate limit', 'cloud-site-mover-clean-room'); ?></strong></td><td><?php echo esc_html((string)($o['auth_rate_limit_per_minute'] ?? 120)); ?>/min</td></tr>
+                    <tr><td><strong><?php esc_html_e('Step lock timeout', 'cloud-site-mover-clean-room'); ?></strong></td><td><?php echo esc_html((string)($o['job_step_lock_timeout_seconds'] ?? 120)); ?>s</td></tr>
+                    <tr><td><strong><?php esc_html_e('Allowlist entries', 'cloud-site-mover-clean-room'); ?></strong></td><td><?php echo esc_html((string)count($allowlist_entries)); ?></td></tr>
+                </tbody>
+            </table>
 
             <h2>Actions</h2>
             <?php self::button('ping', 'Test remote connection'); ?>
@@ -192,6 +213,7 @@ final class CSMCR_Plugin {
             <?php self::button('bg_enable', 'Enable background runner'); ?>
             <?php self::button('bg_disable', 'Disable background runner'); ?>
             <?php self::button('job_cancel', 'Cancel active job'); ?>
+            <?php self::button('job_retry_failed', __('Retry failed job', 'cloud-site-mover-clean-room')); ?>
             <p><strong>Background runner:</strong> <?php echo !empty($o['background_enabled']) ? 'Enabled' : 'Disabled'; ?>. Next scheduled run: <?php echo esc_html(CSMCR_Background::next_run_label()); ?></p>
 
             <h2>Profiles</h2>
@@ -342,6 +364,9 @@ wp csmcr job cancel</pre>
                     'allow_file_write' => !empty($_POST['allow_file_write']) ? 1 : 0,
                     'allow_theme_plugin_write' => !empty($_POST['allow_theme_plugin_write']) ? 1 : 0,
                     'allow_multisite_beta' => !empty($_POST['allow_multisite_beta']) ? 1 : 0,
+                    'allow_legacy_auth' => !empty($_POST['allow_legacy_auth']) ? 1 : 0,
+                    'enforce_https' => !empty($_POST['enforce_https']) ? 1 : 0,
+                    'ip_allowlist' => sanitize_textarea_field(wp_unslash($_POST['ip_allowlist'] ?? '')), 
                     'auto_backup_db' => !empty($_POST['auto_backup_db']) ? 1 : 0,
                     'skip_same_files' => !empty($_POST['skip_same_files']) ? 1 : 0,
                     'use_file_hash' => !empty($_POST['use_file_hash']) ? 1 : 0,
@@ -350,16 +375,27 @@ wp csmcr job cancel</pre>
                     'background_enabled' => !empty($_POST['background_enabled']) ? 1 : 0,
                     'background_delay_seconds' => max(15, (int)($_POST['background_delay_seconds'] ?? 45)),
                     'background_max_steps' => max(1, min(10, (int)($_POST['background_max_steps'] ?? 1))),
+                    'max_step_retries' => max(0, min(10, (int)($_POST['max_step_retries'] ?? 3))),
+                    'auth_max_skew_seconds' => max(30, min(3600, (int)($_POST['auth_max_skew_seconds'] ?? 300))),
+                    'auth_rate_limit_per_minute' => max(10, min(5000, (int)($_POST['auth_rate_limit_per_minute'] ?? 120))),
+                    'job_step_lock_timeout_seconds' => max(15, min(1800, (int)($_POST['job_step_lock_timeout_seconds'] ?? 120))),
                     'max_reports' => max(1, min(100, (int)($_POST['max_reports'] ?? 20))),
                     'max_backups' => max(1, min(100, (int)($_POST['max_backups'] ?? 10))),
                     'multisite_source_blog_id' => max(1, (int)($_POST['multisite_source_blog_id'] ?? 1)),
                     'multisite_target_blog_id' => max(1, (int)($_POST['multisite_target_blog_id'] ?? 1)),
                     'package_scopes' => sanitize_text_field(wp_unslash($_POST['package_scopes'] ?? 'uploads,themes,plugins')),
                 ]);
+                $raw_allow = (string)($_POST['ip_allowlist'] ?? '');
+                $valid_allow = self::ip_allowlist_values((string)wp_unslash($raw_allow));
+                $total_allow = count(array_filter(array_map('trim', preg_split('/\r\n|\r|\n/', (string)wp_unslash($raw_allow)))));
+                if ($total_allow > count($valid_allow)) {
+                    self::log('Warning: Some IP allowlist entries were ignored as invalid. Valid: ' . count($valid_allow) . ' / Total: ' . $total_allow);
+                }
                 self::log('Settings saved.');
             } else {
                 check_admin_referer('csmcr_action');
                 if ($action === 'ping') { $r = CSMCR_HTTP::remote('ping'); self::log('Remote ping OK: ' . wp_json_encode($r)); }
+                if ($action === 'rotate_secret') { self::save_opts(['secret' => wp_generate_password(56, false, false)]); self::log('Shared secret rotated.'); }
                 if ($action === 'dry_run') { CSMCR_Migrator::dry_run(); }
                 if ($action === 'preflight') { CSMCR_Preflight::run(true); }
                 if ($action === 'cleanup_temp') { CSMCR_Maintenance::cleanup(true); }
@@ -383,6 +419,7 @@ wp csmcr job cancel</pre>
                 if ($action === 'bg_enable') { CSMCR_Background::enable(); }
                 if ($action === 'bg_disable') { CSMCR_Background::disable(); }
                 if ($action === 'job_cancel') { CSMCR_Jobs::cancel(); }
+                if ($action === 'job_retry_failed') { CSMCR_Jobs::retry_failed(); }
                 if ($action === 'save_profile') { self::save_profile($_POST['profile_name'] ?? ''); }
                 if ($action === 'load_profile') { self::load_profile($_POST['profile_name'] ?? ''); }
             }
@@ -394,6 +431,7 @@ wp csmcr job cancel</pre>
     public static function rest_routes() {
         $routes = [
             ['GET','/ping',[__CLASS__,'api_ping']],
+            ['GET','/security/status',[__CLASS__,'api_security_status']],
             ['GET','/preflight',['CSMCR_API','preflight']],
             ['GET','/db/tables',['CSMCR_API','db_tables']],
             ['GET','/db/schema',['CSMCR_API','db_schema']],
@@ -426,15 +464,79 @@ wp csmcr job cancel</pre>
         return hash_hmac('sha256', self::signature_payload($method, $route, $ts, $body_hash), (string)$secret);
     }
 
+    private static function remote_client_ip() {
+        $ip = isset($_SERVER['REMOTE_ADDR']) ? (string)wp_unslash($_SERVER['REMOTE_ADDR']) : 'unknown';
+        return preg_replace('/[^a-fA-F0-9:\.]/', '', $ip);
+    }
+
+    private static function allow_auth_attempt($opts) {
+        $ip = self::remote_client_ip();
+        $limit = max(10, (int)($opts['auth_rate_limit_per_minute'] ?? 120));
+        $bucket = 'csmcr_auth_rl_' . md5($ip . '|' . gmdate('YmdHi'));
+        $count = (int)get_transient($bucket);
+        if ($count >= $limit) { return false; }
+        set_transient($bucket, $count + 1, 70);
+        return true;
+    }
+
+
+    public static function ip_allowlist_values($text) {
+        $lines = preg_split('/\r\n|\r|\n/', (string)$text);
+        $out = [];
+        foreach ((array)$lines as $line) {
+            $v = trim((string)$line);
+            if ($v === '') { continue; }
+            if (strpos($v, '/') !== false) {
+                [$base, $mask] = array_pad(explode('/', $v, 2), 2, '');
+                if (filter_var($base, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) && ctype_digit((string)$mask) && (int)$mask >= 0 && (int)$mask <= 32) {
+                    $out[] = $base . '/' . (int)$mask;
+                }
+                continue;
+            }
+            if (filter_var($v, FILTER_VALIDATE_IP)) { $out[] = $v; }
+        }
+        return array_values(array_unique($out));
+    }
+
+    private static function ip_in_cidr_v4($ip, $cidr) {
+        [$net, $bits] = array_pad(explode('/', (string)$cidr, 2), 2, '');
+        if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) { return false; }
+        if (!filter_var($net, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) { return false; }
+        $bits = (int)$bits;
+        if ($bits < 0 || $bits > 32) { return false; }
+        $ip_long = ip2long($ip);
+        $net_long = ip2long($net);
+        if ($ip_long === false || $net_long === false) { return false; }
+        $mask = $bits === 0 ? 0 : (-1 << (32 - $bits));
+        return (($ip_long & $mask) === ($net_long & $mask));
+    }
+
+    private static function is_remote_ip_allowed($opts) {
+        $allow = self::ip_allowlist_values((string)($opts['ip_allowlist'] ?? ''));
+        if (empty($allow)) { return true; }
+        $ip = self::remote_client_ip();
+        foreach ($allow as $entry) {
+            if (strpos($entry, '/') !== false) {
+                if (self::ip_in_cidr_v4($ip, $entry)) { return true; }
+                continue;
+            }
+            if (hash_equals((string)$entry, (string)$ip)) { return true; }
+        }
+        return false;
+    }
+
     private static function audit_remote_auth($code, $message) {
-        $key = 'csmcr_audit_' . md5((string)$code . '|' . (string)$message);
+        $ip = self::remote_client_ip();
+        $key = 'csmcr_audit_' . md5((string)$code . '|' . (string)$message . '|' . (string)$ip);
         if (get_transient($key)) { return; }
         set_transient($key, 1, 60);
-        self::add_job('AUTH ' . strtoupper((string)$code) . ': ' . $message);
+        self::add_job('AUTH ' . strtoupper((string)$code) . ': ' . $message . ' [ip=' . $ip . ']');
     }
 
     public static function auth($request) {
         $o = self::opts();
+        if (!self::is_remote_ip_allowed($o)) { self::audit_remote_auth('deny', 'IP not in allowlist.'); return false; }
+        if (!self::allow_auth_attempt($o)) { self::audit_remote_auth('deny', 'Rate limit exceeded.'); return false; }
         $secret = $request->get_header('x-csmcr-secret');
         if (!$secret || !hash_equals((string)$o['secret'], (string)$secret)) { self::audit_remote_auth('deny', 'Secret mismatch.'); return false; }
 
@@ -446,7 +548,8 @@ wp csmcr job cancel</pre>
             self::audit_remote_auth('deny', 'Missing signed auth headers.');
             return false;
         }
-        if (abs(time() - $ts) > 300) { self::audit_remote_auth('deny', 'Expired signed request.'); return false; }
+        $max_skew = max(30, (int)($o['auth_max_skew_seconds'] ?? 300));
+        if (abs(time() - $ts) > $max_skew) { self::audit_remote_auth('deny', 'Expired signed request.'); return false; }
 
         $route = isset($_SERVER['REQUEST_URI']) ? wp_parse_url((string)wp_unslash($_SERVER['REQUEST_URI']), PHP_URL_PATH) : (string)$request->get_route();
         $method = (string)$request->get_method();
@@ -456,6 +559,21 @@ wp csmcr job cancel</pre>
         $ok = hash_equals($expected_sig, $sig);
         if (!$ok) { self::audit_remote_auth('deny', 'Signature mismatch.'); }
         return $ok;
+    }
+
+
+    public static function api_security_status() {
+        $o = self::opts();
+        $allow = self::ip_allowlist_values((string)($o['ip_allowlist'] ?? ''));
+        return [
+            'allow_legacy_auth' => (bool)!empty($o['allow_legacy_auth']),
+            'enforce_https' => (bool)!empty($o['enforce_https']),
+            'auth_max_skew_seconds' => (int)($o['auth_max_skew_seconds'] ?? 300),
+            'auth_rate_limit_per_minute' => (int)($o['auth_rate_limit_per_minute'] ?? 120),
+            'job_step_lock_timeout_seconds' => (int)($o['job_step_lock_timeout_seconds'] ?? 120),
+            'ip_allowlist_count' => count($allow),
+            'ip_allowlist_entries' => array_values($allow),
+        ];
     }
 
     public static function api_ping() {
@@ -469,6 +587,7 @@ final class CSMCR_HTTP {
         $o = CSMCR_Plugin::opts();
         if (empty($o['remote_url']) || empty($o['remote_secret'])) { throw new Exception('Remote URL and secret are required.'); }
         $url = trailingslashit($o['remote_url']) . 'wp-json/' . CSMCR_NS . '/' . ltrim($path, '/');
+        if (!empty($o['enforce_https']) && stripos((string)$o['remote_url'], 'https://') !== 0) { throw new Exception('Remote URL must use HTTPS when HTTPS enforcement is enabled.'); }
         $args = ['method'=>$method, 'timeout'=>120, 'headers'=>['x-csmcr-secret'=>$o['remote_secret']]];
         $json_body = '';
         if ($body !== null) {
@@ -602,6 +721,14 @@ final class CSMCR_Preflight {
         $add('DB write permission flag', !empty($o['allow_db_write']) ? 'warning' : 'ok', !empty($o['allow_db_write']) ? 'enabled on this site' : 'disabled');
         $add('Uploads write permission flag', !empty($o['allow_file_write']) ? 'warning' : 'ok', !empty($o['allow_file_write']) ? 'enabled on this site' : 'disabled');
         $add('Themes/plugins write permission flag', !empty($o['allow_theme_plugin_write']) ? 'warning' : 'ok', !empty($o['allow_theme_plugin_write']) ? 'enabled on this site' : 'disabled');
+
+        $allow = CSMCR_Plugin::ip_allowlist_values((string)($o['ip_allowlist'] ?? ''));
+        $add('Signed auth mode', !empty($o['allow_legacy_auth']) ? 'warning' : 'ok', !empty($o['allow_legacy_auth']) ? 'legacy compatibility enabled' : 'legacy compatibility disabled');
+        $add('HTTPS enforcement for remote', !empty($o['enforce_https']) ? 'ok' : 'warning', !empty($o['enforce_https']) ? 'enabled' : 'disabled');
+        $add('Auth skew window', ((int)($o['auth_max_skew_seconds'] ?? 300) <= 600) ? 'ok' : 'warning', (string)($o['auth_max_skew_seconds'] ?? 300) . ' seconds');
+        $add('Auth rate limit per minute', ((int)($o['auth_rate_limit_per_minute'] ?? 120) >= 60) ? 'ok' : 'warning', (string)($o['auth_rate_limit_per_minute'] ?? 120));
+        $add('IP/CIDR allowlist entries', count($allow) > 0 ? 'ok' : 'warning', count($allow) > 0 ? (string)count($allow) : 'none configured');
+
         if (!empty($o['remote_url']) && !empty($o['remote_secret'])) {
             try {
                 $remote = CSMCR_HTTP::remote('ping');
@@ -1244,6 +1371,8 @@ final class CSMCR_Jobs {
             'started_at'=>gmdate('c'),
             'updated_at'=>gmdate('c'),
             'messages'=>[],
+            'retry_count'=>0,
+            'last_error'=>'',
         ]);
         CSMCR_Plugin::save_active_job($job);
         CSMCR_Background::maybe_schedule();
@@ -1262,13 +1391,49 @@ final class CSMCR_Jobs {
     public static function step() {
         $job = CSMCR_Plugin::active_job();
         if (empty($job) || ($job['status'] ?? '') !== 'running') { throw new Exception('No running job.'); }
-        if (($job['type'] ?? '') === 'db') { $job = self::step_db($job); }
-        elseif (($job['type'] ?? '') === 'files') { $job = self::step_files($job); }
-        else { throw new Exception('Invalid job state.'); }
+        $o = CSMCR_Plugin::opts();
+        $max_retries = max(0, (int)($o['max_step_retries'] ?? 3));
+        $lock_ttl = max(15, (int)($o['job_step_lock_timeout_seconds'] ?? 120));
+        if (get_transient(CSMCR_JOB_STEP_LOCK)) { throw new Exception('Job step is locked by another runner.'); }
+        set_transient(CSMCR_JOB_STEP_LOCK, 1, $lock_ttl);
+        try {
+            if (($job['type'] ?? '') === 'db') { $job = self::step_db($job); }
+            elseif (($job['type'] ?? '') === 'files') { $job = self::step_files($job); }
+            else { throw new Exception('Invalid job state.'); }
+            $job['retry_count'] = 0;
+            $job['last_error'] = '';
+        } catch (Throwable $e) {
+            $job['retry_count'] = (int)($job['retry_count'] ?? 0) + 1;
+            $job['last_error'] = $e->getMessage();
+            $job['messages'][] = 'Step failed (' . $job['retry_count'] . '/' . $max_retries . '): ' . $e->getMessage();
+            if ($job['retry_count'] > $max_retries) {
+                $job['status'] = 'failed';
+                CSMCR_Background::unschedule();
+                $job = self::finalize_failed($job);
+                CSMCR_Plugin::add_job('Job failed after retries: ' . ($job['kind'] ?? 'unknown'));
+            }
+        } finally {
+            delete_transient(CSMCR_JOB_STEP_LOCK);
+        }
         CSMCR_Plugin::save_active_job($job);
         if (($job['status'] ?? '') === 'complete') { self::finalize($job); }
-        else { CSMCR_Background::maybe_schedule(); }
+        elseif (($job['status'] ?? '') === 'running') { CSMCR_Background::maybe_schedule(); }
         return CSMCR_Plugin::active_job();
+    }
+
+
+    public static function retry_failed() {
+        $job = CSMCR_Plugin::active_job();
+        if (empty($job)) { throw new Exception('No active job to retry.'); }
+        if (($job['status'] ?? '') !== 'failed') { throw new Exception('Active job is not failed.'); }
+        $job['status'] = 'running';
+        $job['retry_count'] = 0;
+        $job['last_error'] = '';
+        unset($job['failed_report'], $job['failed_at']);
+        $job['messages'][] = 'Retry requested by admin.';
+        CSMCR_Plugin::save_active_job($job);
+        CSMCR_Background::maybe_schedule(true);
+        CSMCR_Plugin::add_job('Retrying failed job: ' . ($job['kind'] ?? 'unknown'));
     }
 
     public static function status_html() {
@@ -1368,10 +1533,33 @@ final class CSMCR_Jobs {
         $pct = self::percent($job);
         echo '<div style="max-width:760px;padding:12px;border:1px solid #ccd0d4;background:#fff;margin:8px 0">';
         echo '<p><strong>Active job:</strong> ' . esc_html($job['kind'] ?? '') . ' — ' . esc_html($job['status'] ?? '') . '</p>';
+        if (($job['status'] ?? '') === 'failed') {
+            echo '<p style="color:#b32d2e"><strong>' . esc_html__('Job failed.', 'cloud-site-mover-clean-room') . '</strong> ' . esc_html((string)($job['last_error'] ?? __('Unknown error', 'cloud-site-mover-clean-room'))) . '</p>'; 
+        }
         echo '<div style="height:16px;background:#eee;border-radius:10px;overflow:hidden"><div style="height:16px;width:' . esc_attr($pct) . '%;background:#2271b1"></div></div>';
         echo '<p>' . esc_html($pct) . '% — done ' . esc_html((string)($job['done'] ?? 0)) . ' / ' . esc_html((string)($job['total'] ?? 0)) . '</p>';
-        echo '<textarea readonly class="large-text code" rows="5">' . esc_textarea(implode("\\n", array_slice(array_reverse($job['messages'] ?? []), -8))) . '</textarea>';
+        echo '<p><strong>' . esc_html__('Retries:', 'cloud-site-mover-clean-room') . '</strong> ' . esc_html((string)($job['retry_count'] ?? 0));
+        if (!empty($job['last_error'])) { echo ' — <strong>' . esc_html__('Last error:', 'cloud-site-mover-clean-room') . '</strong> ' . esc_html((string)$job['last_error']); }
+        echo '</p>';
+        if (!empty($job['failed_report'])) {
+            $r = sanitize_file_name((string)$job['failed_report']);
+            $u = wp_nonce_url(admin_url('admin-post.php?action=csmcr_download_report&file=' . rawurlencode($r)), 'csmcr_download_report');
+            echo '<p><a class="button button-secondary" href="' . esc_url($u) . '">' . esc_html__('Download failed report', 'cloud-site-mover-clean-room') . '</a></p>';
+        }
+        echo '<textarea readonly class="large-text code" rows="5">' . esc_textarea(implode("\n", array_slice(array_reverse($job['messages'] ?? []), -8))) . '</textarea>';
         echo '</div>';
+    }
+
+
+    private static function finalize_failed($job) {
+        $name = 'migration-report-' . gmdate('Ymd-His') . '-' . sanitize_key($job['kind'] ?? 'job') . '-failed.json';
+        $file = CSMCR_Plugin::report_dir() . $name;
+        $job['failed_at'] = gmdate('c');
+        $job['final_preflight'] = CSMCR_Preflight::run(false);
+        file_put_contents($file, wp_json_encode($job, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+        $job['failed_report'] = $name;
+        CSMCR_Plugin::log('Failed resumable job. Report: ' . $name);
+        return $job;
     }
 
     private static function finalize($job) {
@@ -1465,13 +1653,48 @@ final class CSMCR_CLI {
         $verb = $args[0] ?? 'status';
         if ($verb === 'status') { WP_CLI::line(wp_json_encode(CSMCR_Plugin::active_job(), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)); return; }
         if ($verb === 'cancel') { CSMCR_Jobs::cancel(); WP_CLI::success('Active job cancelled.'); return; }
+        if ($verb === 'retry-failed') { CSMCR_Jobs::retry_failed(); WP_CLI::success('Failed job moved back to running state.'); return; }
         if ($verb === 'step') { CSMCR_Jobs::step(); WP_CLI::success('Job step completed.'); return; }
         if ($verb === 'run-until-complete') { $max = isset($assoc['max-steps']) ? (int)$assoc['max-steps'] : 500; for ($i=0; $i<$max; $i++) { $job=CSMCR_Plugin::active_job(); if (empty($job) || ($job['status'] ?? '') !== 'running') { WP_CLI::success('No running job, or job complete.'); return; } CSMCR_Jobs::step(); } WP_CLI::warning('Stopped at max steps.'); return; }
         if ($verb === 'start') { $kind = isset($args[1]) ? str_replace('-', '_', $args[1]) : ''; CSMCR_Jobs::start($kind); WP_CLI::success('Started job: ' . $kind); return; }
-        WP_CLI::error('Use: wp csmcr job status|start <pull-db|push-db|pull-uploads|push-uploads|pull-themes|push-themes|pull-plugins|push-plugins>|step|cancel');
+        WP_CLI::error('Use: wp csmcr job status|start <pull-db|push-db|pull-uploads|push-uploads|pull-themes|push-themes|pull-plugins|push-plugins>|step|cancel|retry-failed');
     }
     public function background($args, $assoc) { $verb = $args[0] ?? 'status'; if ($verb === 'enable') { CSMCR_Background::enable(); WP_CLI::success('Background runner enabled.'); return; } if ($verb === 'disable') { CSMCR_Background::disable(); WP_CLI::success('Background runner disabled.'); return; } if ($verb === 'status') { $o = CSMCR_Plugin::opts(); WP_CLI::line(wp_json_encode(['enabled'=>(bool)$o['background_enabled'], 'next_run'=>CSMCR_Background::next_run_label(), 'lock'=>(bool)get_transient(CSMCR_BG_LOCK)], JSON_PRETTY_PRINT)); return; } WP_CLI::error('Use: wp csmcr background status|enable|disable'); }
     public function preflight() { WP_CLI::line(wp_json_encode(CSMCR_Preflight::run(false), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)); }
+
+    public function secret($args, $assoc) {
+        $verb = $args[0] ?? 'show';
+        if ($verb === 'show') {
+            $o = CSMCR_Plugin::opts();
+            WP_CLI::line(wp_json_encode(['masked' => CSMCR_Settings::mask_secret((string)$o['secret'])], JSON_PRETTY_PRINT));
+            return;
+        }
+        if ($verb === 'rotate') {
+            CSMCR_Plugin::save_opts(['secret' => wp_generate_password(56, false, false)]);
+            CSMCR_Plugin::log('Shared secret rotated via WP-CLI.');
+            WP_CLI::success('Shared secret rotated. Update remote peer secret accordingly.');
+            return;
+        }
+        WP_CLI::error('Use: wp csmcr secret show|rotate');
+    }
+
+
+    public function security($args, $assoc) {
+        $verb = $args[0] ?? 'status';
+        if ($verb !== 'status') { WP_CLI::error('Use: wp csmcr security status'); }
+        $o = CSMCR_Plugin::opts();
+        $allow = CSMCR_Plugin::ip_allowlist_values((string)($o['ip_allowlist'] ?? ''));
+        WP_CLI::line(wp_json_encode([
+            'allow_legacy_auth' => (bool)!empty($o['allow_legacy_auth']),
+            'enforce_https' => (bool)!empty($o['enforce_https']),
+            'auth_max_skew_seconds' => (int)($o['auth_max_skew_seconds'] ?? 300),
+            'auth_rate_limit_per_minute' => (int)($o['auth_rate_limit_per_minute'] ?? 120),
+            'job_step_lock_timeout_seconds' => (int)($o['job_step_lock_timeout_seconds'] ?? 120),
+            'ip_allowlist_count' => count($allow),
+            'ip_allowlist_entries' => array_values($allow),
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+    }
+
     public function cleanup() { $r = CSMCR_Maintenance::cleanup(true); WP_CLI::success('Cleanup complete. Removed ' . (int)$r['count'] . ' files.'); }
     public function manifest() { WP_CLI::line(wp_json_encode(CSMCR_Package::site_manifest(false), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)); }
     public function handoff_plan() { $file = CSMCR_Package::create_handoff_plan(true); WP_CLI::success('Created handoff plan: ' . basename($file)); }
