@@ -103,7 +103,7 @@ final class CSMCR_Plugin {
         if (!current_user_can('manage_options')) { return; }
         $o = self::opts();
         $profiles = self::profiles();
-        $allowlist_entries = self::ip_allowlist_values((string)($o['ip_allowlist'] ?? ''));
+        $security = self::security_status_snapshot();
         $url = admin_url('tools.php?page=cloud-site-mover');
         ?>
         <div class="wrap">
@@ -161,12 +161,12 @@ final class CSMCR_Plugin {
             <h2><?php esc_html_e('Security Summary', 'cloud-site-mover-clean-room'); ?></h2>
             <table class="widefat" style="max-width:760px;margin-bottom:12px">
                 <tbody>
-                    <tr><td><strong><?php esc_html_e('Legacy auth', 'cloud-site-mover-clean-room'); ?></strong></td><td><?php echo !empty($o['allow_legacy_auth']) ? esc_html__('Enabled', 'cloud-site-mover-clean-room') : esc_html__('Disabled', 'cloud-site-mover-clean-room'); ?></td></tr>
-                    <tr><td><strong><?php esc_html_e('HTTPS enforcement', 'cloud-site-mover-clean-room'); ?></strong></td><td><?php echo !empty($o['enforce_https']) ? esc_html__('Enabled', 'cloud-site-mover-clean-room') : esc_html__('Disabled', 'cloud-site-mover-clean-room'); ?></td></tr>
-                    <tr><td><strong><?php esc_html_e('Auth skew window', 'cloud-site-mover-clean-room'); ?></strong></td><td><?php echo esc_html((string)($o['auth_max_skew_seconds'] ?? 300)); ?>s</td></tr>
-                    <tr><td><strong><?php esc_html_e('Auth rate limit', 'cloud-site-mover-clean-room'); ?></strong></td><td><?php echo esc_html((string)($o['auth_rate_limit_per_minute'] ?? 120)); ?>/min</td></tr>
-                    <tr><td><strong><?php esc_html_e('Step lock timeout', 'cloud-site-mover-clean-room'); ?></strong></td><td><?php echo esc_html((string)($o['job_step_lock_timeout_seconds'] ?? 120)); ?>s</td></tr>
-                    <tr><td><strong><?php esc_html_e('Allowlist entries', 'cloud-site-mover-clean-room'); ?></strong></td><td><?php echo esc_html((string)count($allowlist_entries)); ?></td></tr>
+                    <tr><td><strong><?php esc_html_e('Legacy auth', 'cloud-site-mover-clean-room'); ?></strong></td><td><?php echo !empty($security['allow_legacy_auth']) ? esc_html__('Enabled', 'cloud-site-mover-clean-room') : esc_html__('Disabled', 'cloud-site-mover-clean-room'); ?></td></tr>
+                    <tr><td><strong><?php esc_html_e('HTTPS enforcement', 'cloud-site-mover-clean-room'); ?></strong></td><td><?php echo !empty($security['enforce_https']) ? esc_html__('Enabled', 'cloud-site-mover-clean-room') : esc_html__('Disabled', 'cloud-site-mover-clean-room'); ?></td></tr>
+                    <tr><td><strong><?php esc_html_e('Auth skew window', 'cloud-site-mover-clean-room'); ?></strong></td><td><?php echo esc_html((string)($security['auth_max_skew_seconds'] ?? 300)); ?>s</td></tr>
+                    <tr><td><strong><?php esc_html_e('Auth rate limit', 'cloud-site-mover-clean-room'); ?></strong></td><td><?php echo esc_html((string)($security['auth_rate_limit_per_minute'] ?? 120)); ?>/min</td></tr>
+                    <tr><td><strong><?php esc_html_e('Step lock timeout', 'cloud-site-mover-clean-room'); ?></strong></td><td><?php echo esc_html((string)($security['job_step_lock_timeout_seconds'] ?? 120)); ?>s</td></tr>
+                    <tr><td><strong><?php esc_html_e('Allowlist entries', 'cloud-site-mover-clean-room'); ?></strong></td><td><?php echo esc_html((string)($security['ip_allowlist_count'] ?? 0)); ?></td></tr>
                 </tbody>
             </table>
 
