@@ -2,14 +2,14 @@
 /**
  * Plugin Name: Cloud Site Mover Clean Room
  * Description: Clean-room WordPress cloud migration helper for DB push/pull, media/theme/plugin sync, profiles, WP-CLI, and guarded multisite planning.
- * Version: 1.1.0
+ * Version: 1.2.0
  * Author: Clean Room Build
  * License: GPL-2.0-or-later
  */
 
 if (!defined('ABSPATH')) { exit; }
 
-define('CSMCR_VERSION', '1.1.0');
+define('CSMCR_VERSION', '1.2.0');
 define('CSMCR_ACTIVE_JOB_OPT', 'csmcr_active_job');
 define('CSMCR_OPT', 'csmcr_options');
 define('CSMCR_PROFILE_OPT', 'csmcr_profiles');
@@ -17,6 +17,12 @@ define('CSMCR_JOBS_OPT', 'csmcr_jobs');
 define('CSMCR_NS', 'cloud-site-mover/v1');
 define('CSMCR_CRON_HOOK', 'csmcr_background_step');
 define('CSMCR_BG_LOCK', 'csmcr_background_lock');
+define('CSMCR_MAIN_FILE', __FILE__);
+
+require_once __DIR__ . '/includes/Core/Loader.php';
+CSMCR_Loader::require_core();
+register_activation_hook(CSMCR_MAIN_FILE, ['CSMCR_Core_Plugin', 'on_activate']);
+register_deactivation_hook(CSMCR_MAIN_FILE, ['CSMCR_Core_Plugin', 'on_deactivate']);
 
 final class CSMCR_Plugin {
     public static function init() {
@@ -32,89 +38,23 @@ final class CSMCR_Plugin {
         if (defined('WP_CLI') && WP_CLI) { CSMCR_CLI::register(); }
     }
 
-    public static function defaults() {
-        return [
-            'secret' => wp_generate_password(56, false, false),
-            'remote_url' => '',
-            'remote_secret' => '',
-            'search' => site_url(),
-            'replace' => site_url(),
-            'db_batch' => 500,
-            'file_batch' => 30,
-            'chunk_bytes' => 524288,
-            'exclude_tables' => '',
-            'exclude_paths' => "*.php\n*.phtml\n*.phar\n.htaccess\nwp-config.php",
-            'allow_db_write' => 0,
-            'allow_file_write' => 0,
-            'allow_theme_plugin_write' => 0,
-            'allow_multisite_beta' => 0,
-            'uploads_cursor' => 0,
-            'themes_cursor' => 0,
-            'plugins_cursor' => 0,
-            'last_log' => '',
-            'auto_backup_db' => 1,
-            'skip_same_files' => 1,
-            'use_file_hash' => 0,
-            'ajax_step_delay_ms' => 900,
-            'background_enabled' => 0,
-            'background_delay_seconds' => 45,
-            'background_max_steps' => 1,
-            'max_reports' => 20,
-            'max_backups' => 10,
-            'manifest_include_hashes' => 0,
-            'multisite_source_blog_id' => 1,
-            'multisite_target_blog_id' => 1,
-            'package_scopes' => 'uploads,themes,plugins',
-        ];
-    }
+    public static function defaults() { return CSMCR_Settings::defaults(); }
 
-    public static function opts() {
-        $opts = get_option(CSMCR_OPT, []);
-        if (!is_array($opts)) { $opts = []; }
-        $opts = array_merge(self::defaults(), $opts);
-        update_option(CSMCR_OPT, $opts, false);
-        return $opts;
-    }
+    public static function opts() { return CSMCR_Settings::opts(); }
 
-    public static function save_opts($new) {
-        $opts = self::opts();
-        foreach ($new as $k => $v) {
-            if (array_key_exists($k, $opts)) { $opts[$k] = $v; }
-        }
-        update_option(CSMCR_OPT, $opts, false);
-        return $opts;
-    }
+    public static function save_opts($new) { return CSMCR_Settings::save_opts((array)$new); }
 
-    public static function profiles() {
-        $profiles = get_option(CSMCR_PROFILE_OPT, []);
-        return is_array($profiles) ? $profiles : [];
-    }
+    public static function profiles() { return CSMCR_Settings::profiles(); }
 
-    public static function jobs() {
-        $jobs = get_option(CSMCR_JOBS_OPT, []);
-        return is_array($jobs) ? array_slice($jobs, 0, 40) : [];
-    }
+    public static function jobs() { return CSMCR_Jobs_Manager::jobs(); }
 
-    public static function add_job($msg) {
-        $jobs = self::jobs();
-        array_unshift($jobs, '[' . gmdate('Y-m-d H:i:s') . ' UTC] ' . wp_strip_all_tags((string)$msg));
-        update_option(CSMCR_JOBS_OPT, array_slice($jobs, 0, 40), false);
-    }
+    public static function add_job($msg) { CSMCR_Jobs_Manager::add_job($msg); }
 
-    public static function active_job() {
-        $job = get_option(CSMCR_ACTIVE_JOB_OPT, []);
-        return is_array($job) ? $job : [];
-    }
+    public static function active_job() { return CSMCR_Jobs_Manager::get_active(); }
 
-    public static function save_active_job($job) {
-        $job['updated_at'] = gmdate('c');
-        update_option(CSMCR_ACTIVE_JOB_OPT, $job, false);
-        return $job;
-    }
+    public static function save_active_job($job) { return CSMCR_Jobs_Manager::save_active($job); }
 
-    public static function clear_active_job() {
-        delete_option(CSMCR_ACTIVE_JOB_OPT);
-    }
+    public static function clear_active_job() { CSMCR_Jobs_Manager::clear_active(); }
 
     public static function report_dir() {
         $u = wp_upload_dir();
@@ -144,12 +84,7 @@ final class CSMCR_Plugin {
         self::log('Loaded profile: ' . $name);
     }
 
-    public static function log($msg) {
-        $opts = self::opts();
-        $line = '[' . gmdate('Y-m-d H:i:s') . ' UTC] ' . wp_strip_all_tags((string)$msg);
-        $opts['last_log'] = $line . "\n" . substr((string)$opts['last_log'], 0, 16000);
-        update_option(CSMCR_OPT, $opts, false);
-    }
+    public static function log($msg) { CSMCR_Logger::info($msg); }
 
     public static function admin_menu() {
         add_management_page('Cloud Site Mover', 'Cloud Site Mover', 'manage_options', 'cloud-site-mover', [__CLASS__, 'admin_page']);
@@ -177,7 +112,10 @@ final class CSMCR_Plugin {
                 <?php wp_nonce_field('csmcr_save'); ?>
                 <input type="hidden" name="csmcr_action" value="save" />
                 <table class="form-table" role="presentation">
-                    <tr><th>Your shared secret</th><td><code style="user-select:all"><?php echo esc_html($o['secret']); ?></code></td></tr>
+                    <tr><th>Your shared secret</th><td>
+                        <code><?php echo esc_html(CSMCR_Settings::mask_secret($o['secret'])); ?></code>
+                        <details style="margin-top:6px"><summary>Reveal full secret</summary><code style="user-select:all"><?php echo esc_html($o['secret']); ?></code></details>
+                    </td></tr>
                     <tr><th>Remote/source URL</th><td><input class="regular-text" name="remote_url" value="<?php echo esc_attr($o['remote_url']); ?>" placeholder="https://old-site.com" /></td></tr>
                     <tr><th>Remote/source secret</th><td><input class="regular-text" name="remote_secret" value="<?php echo esc_attr($o['remote_secret']); ?>" /></td></tr>
                     <tr><th>Search URL/string</th><td><input class="regular-text" name="search" value="<?php echo esc_attr($o['search']); ?>" /></td></tr>
@@ -192,6 +130,7 @@ final class CSMCR_Plugin {
                         <label><input type="checkbox" name="allow_file_write" value="1" <?php checked($o['allow_file_write']); ?> /> Upload/media writes</label><br>
                         <label><input type="checkbox" name="allow_theme_plugin_write" value="1" <?php checked($o['allow_theme_plugin_write']); ?> /> Theme/plugin folder writes</label><br>
                         <label><input type="checkbox" name="allow_multisite_beta" value="1" <?php checked($o['allow_multisite_beta']); ?> /> Guarded multisite planning endpoints</label><br>
+                        <label><input type="checkbox" name="allow_legacy_auth" value="1" <?php checked($o['allow_legacy_auth']); ?> /> Allow legacy secret-only remote auth (compat mode)</label><br>
                         <label><input type="checkbox" name="auto_backup_db" value="1" <?php checked($o['auto_backup_db']); ?> /> Auto-create DB backup before pull/push overwrite</label><br>
                         <label><input type="checkbox" name="skip_same_files" value="1" <?php checked($o['skip_same_files']); ?> /> Skip files with same size and modified time</label><br>
                         <label><input type="checkbox" name="use_file_hash" value="1" <?php checked($o['use_file_hash']); ?> /> Add SHA1 hashes to file manifests when comparing files</label><br>
@@ -474,10 +413,49 @@ wp csmcr job cancel</pre>
         foreach ($routes as $r) { register_rest_route(CSMCR_NS, $r[1], ['methods'=>$r[0], 'callback'=>$r[2], 'permission_callback'=>[__CLASS__,'auth']]); }
     }
 
+    private static function body_hash_from_request($request) {
+        $body = (string)$request->get_body();
+        return hash('sha256', $body);
+    }
+
+    private static function signature_payload($method, $route, $ts, $body_hash) {
+        return strtoupper((string)$method) . "\n" . (string)$route . "\n" . (string)$ts . "\n" . (string)$body_hash;
+    }
+
+    public static function compute_signature($secret, $method, $route, $ts, $body_hash) {
+        return hash_hmac('sha256', self::signature_payload($method, $route, $ts, $body_hash), (string)$secret);
+    }
+
+    private static function audit_remote_auth($code, $message) {
+        $key = 'csmcr_audit_' . md5((string)$code . '|' . (string)$message);
+        if (get_transient($key)) { return; }
+        set_transient($key, 1, 60);
+        self::add_job('AUTH ' . strtoupper((string)$code) . ': ' . $message);
+    }
+
     public static function auth($request) {
         $o = self::opts();
         $secret = $request->get_header('x-csmcr-secret');
-        return $secret && hash_equals((string)$o['secret'], (string)$secret);
+        if (!$secret || !hash_equals((string)$o['secret'], (string)$secret)) { self::audit_remote_auth('deny', 'Secret mismatch.'); return false; }
+
+        $ts = (int)$request->get_header('x-csmcr-ts');
+        $sig = (string)$request->get_header('x-csmcr-signature');
+        $hash = (string)$request->get_header('x-csmcr-body-hash');
+        if ($ts <= 0 || !$sig || !$hash) {
+            if (!empty($o['allow_legacy_auth'])) { self::audit_remote_auth('legacy', 'Accepted legacy secret-only auth.'); return true; }
+            self::audit_remote_auth('deny', 'Missing signed auth headers.');
+            return false;
+        }
+        if (abs(time() - $ts) > 300) { self::audit_remote_auth('deny', 'Expired signed request.'); return false; }
+
+        $route = isset($_SERVER['REQUEST_URI']) ? wp_parse_url((string)wp_unslash($_SERVER['REQUEST_URI']), PHP_URL_PATH) : (string)$request->get_route();
+        $method = (string)$request->get_method();
+        $expected_hash = self::body_hash_from_request($request);
+        if (!hash_equals($expected_hash, $hash)) { self::audit_remote_auth('deny', 'Body hash mismatch.'); return false; }
+        $expected_sig = self::compute_signature($secret, $method, $route, $ts, $hash);
+        $ok = hash_equals($expected_sig, $sig);
+        if (!$ok) { self::audit_remote_auth('deny', 'Signature mismatch.'); }
+        return $ok;
     }
 
     public static function api_ping() {
@@ -492,7 +470,18 @@ final class CSMCR_HTTP {
         if (empty($o['remote_url']) || empty($o['remote_secret'])) { throw new Exception('Remote URL and secret are required.'); }
         $url = trailingslashit($o['remote_url']) . 'wp-json/' . CSMCR_NS . '/' . ltrim($path, '/');
         $args = ['method'=>$method, 'timeout'=>120, 'headers'=>['x-csmcr-secret'=>$o['remote_secret']]];
-        if ($body !== null) { $args['headers']['content-type'] = 'application/json'; $args['body'] = wp_json_encode($body); }
+        $json_body = '';
+        if ($body !== null) {
+            $json_body = wp_json_encode($body);
+            $args['headers']['content-type'] = 'application/json';
+            $args['body'] = $json_body;
+        }
+        $ts = time();
+        $body_hash = hash('sha256', (string)$json_body);
+        $route = wp_parse_url((string)$url, PHP_URL_PATH);
+        $args['headers']['x-csmcr-ts'] = (string)$ts;
+        $args['headers']['x-csmcr-body-hash'] = $body_hash;
+        $args['headers']['x-csmcr-signature'] = CSMCR_Plugin::compute_signature($o['remote_secret'], $method, $route, $ts, $body_hash);
         $res = wp_remote_request($url, $args);
         if (is_wp_error($res)) { throw new Exception($res->get_error_message()); }
         $code = wp_remote_retrieve_response_code($res);
@@ -1492,4 +1481,4 @@ final class CSMCR_CLI {
     public function multisite_plan() { WP_CLI::line(wp_json_encode(CSMCR_API::multisite_plan(), JSON_PRETTY_PRINT)); }
 }
 
-CSMCR_Plugin::init();
+CSMCR_Core_Plugin::init();
