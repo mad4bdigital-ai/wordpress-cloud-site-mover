@@ -727,12 +727,12 @@ final class CSMCR_Preflight {
         $add('Uploads write permission flag', !empty($o['allow_file_write']) ? 'warning' : 'ok', !empty($o['allow_file_write']) ? 'enabled on this site' : 'disabled');
         $add('Themes/plugins write permission flag', !empty($o['allow_theme_plugin_write']) ? 'warning' : 'ok', !empty($o['allow_theme_plugin_write']) ? 'enabled on this site' : 'disabled');
 
-        $allow = CSMCR_Plugin::ip_allowlist_values((string)($o['ip_allowlist'] ?? ''));
-        $add('Signed auth mode', !empty($o['allow_legacy_auth']) ? 'warning' : 'ok', !empty($o['allow_legacy_auth']) ? 'legacy compatibility enabled' : 'legacy compatibility disabled');
-        $add('HTTPS enforcement for remote', !empty($o['enforce_https']) ? 'ok' : 'warning', !empty($o['enforce_https']) ? 'enabled' : 'disabled');
-        $add('Auth skew window', ((int)($o['auth_max_skew_seconds'] ?? 300) <= 600) ? 'ok' : 'warning', (string)($o['auth_max_skew_seconds'] ?? 300) . ' seconds');
-        $add('Auth rate limit per minute', ((int)($o['auth_rate_limit_per_minute'] ?? 120) >= 60) ? 'ok' : 'warning', (string)($o['auth_rate_limit_per_minute'] ?? 120));
-        $add('IP/CIDR allowlist entries', count($allow) > 0 ? 'ok' : 'warning', count($allow) > 0 ? (string)count($allow) : 'none configured');
+        $security = CSMCR_Plugin::security_status_snapshot();
+        $add('Signed auth mode', !empty($security['allow_legacy_auth']) ? 'warning' : 'ok', !empty($security['allow_legacy_auth']) ? 'legacy compatibility enabled' : 'legacy compatibility disabled');
+        $add('HTTPS enforcement for remote', !empty($security['enforce_https']) ? 'ok' : 'warning', !empty($security['enforce_https']) ? 'enabled' : 'disabled');
+        $add('Auth skew window', ((int)($security['auth_max_skew_seconds'] ?? 300) <= 600) ? 'ok' : 'warning', (string)($security['auth_max_skew_seconds'] ?? 300) . ' seconds');
+        $add('Auth rate limit per minute', ((int)($security['auth_rate_limit_per_minute'] ?? 120) >= 60) ? 'ok' : 'warning', (string)($security['auth_rate_limit_per_minute'] ?? 120));
+        $add('IP/CIDR allowlist entries', ((int)($security['ip_allowlist_count'] ?? 0) > 0) ? 'ok' : 'warning', ((int)($security['ip_allowlist_count'] ?? 0) > 0) ? (string)($security['ip_allowlist_count']) : 'none configured');
 
         if (!empty($o['remote_url']) && !empty($o['remote_secret'])) {
             try {
@@ -1686,8 +1686,24 @@ final class CSMCR_CLI {
 
     public function security($args, $assoc) {
         $verb = $args[0] ?? 'status';
-        if ($verb !== 'status') { WP_CLI::error('Use: wp csmcr security status'); }
-        WP_CLI::line(wp_json_encode(CSMCR_Plugin::security_status_snapshot(), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+        $s = CSMCR_Plugin::security_status_snapshot();
+        if ($verb === 'status') {
+            WP_CLI::line(wp_json_encode($s, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+            return;
+        }
+        if ($verb === 'check') {
+            $issues = [];
+            if (!empty($s['allow_legacy_auth'])) { $issues[] = 'Legacy auth compatibility is enabled.'; }
+            if (empty($s['enforce_https'])) { $issues[] = 'HTTPS enforcement is disabled.'; }
+            if ((int)($s['ip_allowlist_count'] ?? 0) < 1) { $issues[] = 'IP/CIDR allowlist is empty.'; }
+            if ((int)($s['auth_max_skew_seconds'] ?? 300) > 600) { $issues[] = 'Auth skew window is high (>600s).'; }
+            if ((int)($s['auth_rate_limit_per_minute'] ?? 120) > 1000) { $issues[] = 'Auth rate limit is high (>1000/min).'; }
+            WP_CLI::line(wp_json_encode(['ok'=>empty($issues), 'issues'=>$issues, 'snapshot'=>$s], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+            if (!empty($issues)) { WP_CLI::warning('Security check reported configuration issues.'); }
+            else { WP_CLI::success('Security check passed.'); }
+            return;
+        }
+        WP_CLI::error('Use: wp csmcr security status|check');
     }
 
     public function cleanup() { $r = CSMCR_Maintenance::cleanup(true); WP_CLI::success('Cleanup complete. Removed ' . (int)$r['count'] . ' files.'); }
